@@ -61,12 +61,32 @@
             <scope>runtime</scope>
         </dependency>
 
+<<<<<<< HEAD
         <!-- Lombok -->
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
             <optional>true</optional>
         </dependency>
+=======
+        <!-- Flyway -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+        </dependency>
+
+       <!-- Lombok -->
+<dependency>
+    <groupId>org.projectlombok</groupId>
+    <artifactId>lombok</artifactId>
+    <version>1.18.42</version>
+    <scope>provided</scope>
+</dependency>
+>>>>>>> 6cd7368 (feat: add Firebase push notification support)
 
         <!-- JWT -->
         <dependency>
@@ -151,25 +171,46 @@
             <artifactId>angus-mail</artifactId>
         </dependency>
 
+<<<<<<< HEAD
+=======
+        <dependency>
+            <groupId>com.sendinblue</groupId>
+            <artifactId>sib-api-v3-sdk</artifactId>
+            <version>3.0.0</version>
+        </dependency>
+
+        <dependency>
+
+    <groupId>com.google.firebase</groupId>
+
+    <artifactId>firebase-admin</artifactId>
+
+    <version>9.10.0</version>
+
+</dependency>
+>>>>>>> 6cd7368 (feat: add Firebase push notification support)
     </dependencies>
 
     <build>
         <plugins>
 
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-compiler-plugin</artifactId>
+           <plugin>
+    <groupId>org.apache.maven.plugins</groupId>
+    <artifactId>maven-compiler-plugin</artifactId>
+    <version>3.14.0</version>
 
-                <configuration>
-                    <annotationProcessorPaths>
-                        <path>
-                            <groupId>org.projectlombok</groupId>
-                            <artifactId>lombok</artifactId>
-                        </path>
-                    </annotationProcessorPaths>
-                </configuration>
-            </plugin>
+    <configuration>
+        <release>17</release>
 
+        <annotationProcessorPaths>
+            <path>
+                <groupId>org.projectlombok</groupId>
+                <artifactId>lombok</artifactId>
+                <version>1.18.42</version>
+            </path>
+        </annotationProcessorPaths>
+    </configuration>
+</plugin>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>

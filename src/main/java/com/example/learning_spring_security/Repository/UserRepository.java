@@ -11,6 +11,11 @@ import java.util.Optional;
 public interface UserRepository extends JpaRepository<User, Long> {
     Optional<User> findFirstByUsernameAndStatus(String username, String status);
     Optional<User> findFirstByUsernameOrEmail(String username, String email);
+<<<<<<< HEAD
+=======
+    Optional<User> findByUsernameOrEmail(String username, String email);
+
+>>>>>>> 6cd7368 (feat: add Firebase push notification support)
     Boolean existsByUsernameAndDeletedFalse(String username);
     @Query("SELECT p FROM User p WHERE LOWER(p.fullName)  LIKE LOWER(CONCAT('%', :keyword, '%')) OR LOWER(p.username) LIKE LOWER(CONCAT('%', :keyword, '%')) And (p.deleted IS NULL OR p.deleted = False)")
     List<User> searchUsers(@Param("keyword")String keyword);
