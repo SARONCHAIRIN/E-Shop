@@ -14,14 +14,16 @@ import java.util.Map;
 public class FirebaseNotificationService {
 
     public String sendToDevice(
-            String fid,
+            String token,
             String title,
             String body,
             Map<String, String> data
     ) throws FirebaseMessagingException {
 
+        String cleanToken = token.trim();
+
         Message.Builder messageBuilder = Message.builder()
-                .setFid(fid)
+                .setToken(cleanToken)
                 .setNotification(
                         Notification.builder()
                                 .setTitle(title)

@@ -17,12 +17,16 @@ public class FirebaseConfig {
         if (FirebaseApp.getApps().isEmpty()) {
 
             FirebaseOptions options = FirebaseOptions.builder()
-                    .setCredentials(GoogleCredentials.getApplicationDefault())
+                    .setCredentials(
+                            GoogleCredentials.getApplicationDefault()
+                    )
                     .build();
 
             FirebaseApp.initializeApp(options);
 
-            System.out.println("🔥 Firebase Admin SDK initialized successfully");
+            System.out.println(
+                    "🔥 Firebase Admin SDK initialized successfully"
+            );
         }
     }
 }
