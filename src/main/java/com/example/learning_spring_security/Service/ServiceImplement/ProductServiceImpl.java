@@ -25,10 +25,12 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
+import com.example.learning_spring_security.Service.FirebaseNotificationService;
 
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
+import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
@@ -40,41 +42,139 @@ public class ProductServiceImpl implements ProductService {
     private final ImageService imageService;
     private final ProductMapper productMapper;
     private final ProductSkuServiceImpl productSkuService;
+    private final FirebaseNotificationService firebaseNotificationService;
 
     @Override
-    @Transactional
-    public ResponseErrorTemplate createProduct(ProductRequest request, List<MultipartFile> files, List<MultipartFile> skuImages) throws Exception {
-        SubCategory subCategory = subCategoryRepository.findById(request.getSubCategoryId())
-                .orElseThrow(() -> new ResourceNotFoundException("SubCategory not found with id: " + request.getSubCategoryId()));
+@Transactional
+public ResponseErrorTemplate createProduct(
+        ProductRequest request,
+        List<MultipartFile> files,
+        List<MultipartFile> skuImages
+) throws Exception {
 
-        List<Image> imageUrls = List.of();
-        if (files == null || files.isEmpty()) {
-            throw new Exception("file in image is empty");
-        }
-        imageUrls = files.stream()
-                .map(imageService::uploadImage)
-                .filter(Objects::nonNull)
-                .collect(Collectors.toList());
+    // =========================
+    // 1. FIND SUB CATEGORY
+    // =========================
+    SubCategory subCategory = subCategoryRepository
+            .findById(request.getSubCategoryId())
+            .orElseThrow(() ->
+                    new ResourceNotFoundException(
+                            "SubCategory not found with id: "
+                                    + request.getSubCategoryId()
+                    )
+            );
 
-        Product product = ProductMapper.toEntity(request, subCategory);
-        product.setImage(imageUrls);
-        if (imageUrls != null) {
-            imageUrls.forEach(img -> img.setProduct(product));
-        }
-
-        Product savedProduct = productRepository.save(product);
-
-        if (request.getSkus() != null && !request.getSkus().isEmpty()) {
-            List<ProductSkuRequest> skus = request.getSkus();
-            for (int i = 0; i < skus.size(); i++) {
-                MultipartFile skuImage = skuImages != null && i < skuImages.size() ? skuImages.get(i) : null;
-                this.productSkuService.createSku(savedProduct.getId(), skus.get(i), skuImage);
-            }
-        }
-
-        log.info("Product created: id={}, name={}, skus={}", savedProduct.getId(), savedProduct.getName());
-        return productMapper.toResponse(savedProduct);
+    // =========================
+    // 2. VALIDATE IMAGES
+    // =========================
+    if (files == null || files.isEmpty()) {
+        throw new Exception("file in image is empty");
     }
+
+    // =========================
+    // 3. UPLOAD PRODUCT IMAGES
+    // =========================
+    List<Image> imageUrls = files.stream()
+            .map(imageService::uploadImage)
+            .filter(Objects::nonNull)
+            .collect(Collectors.toList());
+
+    // =========================
+    // 4. CREATE PRODUCT ENTITY
+    // =========================
+    Product product = ProductMapper.toEntity(
+            request,
+            subCategory
+    );
+
+    product.setImage(imageUrls);
+
+    imageUrls.forEach(image ->
+            image.setProduct(product)
+    );
+
+    // =========================
+    // 5. SAVE PRODUCT
+    // =========================
+    Product savedProduct =
+            productRepository.save(product);
+
+    // =========================
+    // 6. CREATE PRODUCT SKUS
+    // =========================
+    if (request.getSkus() != null
+            && !request.getSkus().isEmpty()) {
+
+        List<ProductSkuRequest> skus =
+                request.getSkus();
+
+        for (int i = 0; i < skus.size(); i++) {
+
+            MultipartFile skuImage =
+                    skuImages != null && i < skuImages.size()
+                            ? skuImages.get(i)
+                            : null;
+
+            productSkuService.createSku(
+                    savedProduct.getId(),
+                    skus.get(i),
+                    skuImage
+            );
+        }
+    }
+
+    log.info(
+            "Product created: id={}, name={}, skus={}",
+            savedProduct.getId(),
+            savedProduct.getName(),
+            request.getSkus() != null
+                    ? request.getSkus().size()
+                    : 0
+    );
+
+    // =========================
+    // 7. 🔥 FCM BROADCAST
+    // =========================
+    try {
+
+        log.info(
+                "🔥 START NEW PRODUCT FCM: productId={}, name={}",
+                savedProduct.getId(),
+                savedProduct.getName()
+        );
+
+        firebaseNotificationService.sendToAllUsers(
+                "New Product 🛍️",
+                savedProduct.getName()
+                        + " is now available.",
+                Map.of(
+                        "type", "NEW_PRODUCT",
+                        "productId",
+                        savedProduct.getId().toString()
+                )
+        );
+
+        log.info(
+                "✅ END NEW PRODUCT FCM: productId={}, name={}",
+                savedProduct.getId(),
+                savedProduct.getName()
+        );
+
+    } catch (Exception e) {
+
+        // FCM failure must NOT fail product creation
+        log.warn(
+                "❌ Failed to send new product FCM. productId={}, error={}",
+                savedProduct.getId(),
+                e.getMessage()
+        );
+    }
+
+    // =========================
+    // 8. RESPONSE
+    // =========================
+    return productMapper.toResponse(savedProduct);
+}
 
     @Override
     @Transactional(readOnly = true)

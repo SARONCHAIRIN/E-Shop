@@ -36,6 +36,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import com.example.learning_spring_security.Service.FirebaseNotificationService;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -60,12 +61,12 @@ public class OrderServiceImpl implements OrderService {
     private final PaymentCodeGenerator paymentCodeGenerator;
     private final OrderCancelationRepository orderCancelationRepository;
 
-
     private final BakongService bakongService;
     private final PaymentTransactionService paymentTransactionService;
     private final EmailNotificationService emailNotificationService;
     private final OrderMapper orderMapper;
     private final OrderItemMapper orderItemMapper;
+    private final FirebaseNotificationService firebaseNotificationService;
 
     @Value("${app.exchange-rate.usd-to-khr}")
     private double usdToKhrRate;
@@ -83,7 +84,8 @@ public class OrderServiceImpl implements OrderService {
             throw new BadRequestException("Cart is empty");
         }
         Address shippingAddress = addressRepository.findById(request.getAddressId())
-                .orElseThrow(() -> new ResourceNotFoundException("Address not found with id: " + request.getAddressId()));
+                .orElseThrow(
+                        () -> new ResourceNotFoundException("Address not found with id: " + request.getAddressId()));
 
         if (!addressRepository.isUserHasAddress(userId, request.getAddressId())) {
             throw new BadRequestException("Invalid shipping address");
@@ -100,13 +102,11 @@ public class OrderServiceImpl implements OrderService {
 
         List<OrderItem> orderItems = cart.getCartItems().stream()
                 .map(cartItem -> {
-                    inventoryService.reduceStock(cartItem.getProductSku().getId()
-                            , cartItem.getQuantity());
+                    inventoryService.reduceStock(cartItem.getProductSku().getId(), cartItem.getQuantity());
                     return OrderItemMapper.toEntity(
                             order,
                             cartItem.getProductSku(),
-                            cartItem.getQuantity()
-                    );
+                            cartItem.getQuantity());
                 })
                 .collect(Collectors.toList());
         order.setOrderItems(orderItems);
@@ -132,10 +132,80 @@ public class OrderServiceImpl implements OrderService {
             emailNotificationService.sendOrderConfirmationEmail(
                     user.getEmail(),
                     savedOrder.getOrderNumber(),
-                    savedOrder.getTotalAmount().doubleValue()
-            );
+                    savedOrder.getTotalAmount().doubleValue());
         } catch (Exception e) {
-            log.warn("Failed to send order confirmation email for order {}: {}", savedOrder.getOrderNumber(), e.getMessage());
+            log.warn("Failed to send order confirmation email for order {}: {}", savedOrder.getOrderNumber(),
+                    e.getMessage());
+        }
+
+        // =========================
+
+        // ORDER CREATED FCM
+
+        // =========================
+
+        try {
+
+            log.info(
+
+                    "🔥 START FCM: order={}, customerId={}, method={}",
+
+                    savedOrder.getOrderNumber(),
+
+                    user.getId(),
+
+                    request.getPaymentMethod()
+
+            );
+
+            firebaseNotificationService.sendToUser(
+
+                    user.getId(),
+
+                    "Order Placed 🎉",
+
+                    "Your order " + savedOrder.getOrderNumber()
+
+                            + " has been successfully placed.",
+
+                    Map.of(
+
+                            "type", "ORDER_NEW",
+
+                            "orderId", savedOrder.getId().toString(),
+
+                            "orderNumber", savedOrder.getOrderNumber(),
+
+                            "status", savedOrder.getStatus()
+
+                    )
+
+            );
+
+            log.info(
+
+                    "✅ END FCM: order={}, customerId={}",
+
+                    savedOrder.getOrderNumber(),
+
+                    user.getId()
+
+            );
+
+        } catch (Exception e) {
+
+            // FCM error មិនឱ្យធ្វើឱ្យ Create Order fail
+
+            log.warn(
+
+                    "Failed to send order created FCM. order={}, error={}",
+
+                    savedOrder.getOrderNumber(),
+
+                    e.getMessage()
+
+            );
+
         }
 
         ResponseErrorTemplate orderResponse = orderMapper.toResponse(savedOrder);
@@ -156,8 +226,7 @@ public class OrderServiceImpl implements OrderService {
         org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(
                 request.getPage() - 1,
                 request.getSize(),
-                org.springframework.data.domain.Sort.by("orderDate").descending()
-        );
+                org.springframework.data.domain.Sort.by("orderDate").descending());
 
         Integer type = request.getCriteriaType();
         String value = request.getCriteriaValue();
@@ -189,23 +258,22 @@ public class OrderServiceImpl implements OrderService {
                     Long.parseLong(parts[0].trim()),
                     parts[1].trim(),
                     null, null,
-                    pageable
-            );
+                    pageable);
             successMsg = "Retrieved orders by user and status";
 
         } else if (type == 4) {
             // by userId + date range, criteriaValue format: "userId:startDate:endDate"
             String[] parts = value.split(":");
             if (parts.length != 3) {
-                throw new BadRequestException("criteriaValue for type 4 must be 'userId:startDate:endDate' (yyyy-MM-ddTHH:mm:ss)");
+                throw new BadRequestException(
+                        "criteriaValue for type 4 must be 'userId:startDate:endDate' (yyyy-MM-ddTHH:mm:ss)");
             }
             page = orderRepository.findOrderDetailHistory(
                     Long.parseLong(parts[0].trim()),
                     null,
                     java.time.LocalDateTime.parse(parts[1].trim()),
                     java.time.LocalDateTime.parse(parts[2].trim()),
-                    pageable
-            );
+                    pageable);
             successMsg = "Retrieved orders by user and date range";
 
         } else {
@@ -274,9 +342,8 @@ public class OrderServiceImpl implements OrderService {
             order.getPayment().setStatus(OrderStatus.COMPLETED);
         } else if (OrderStatus.CANCELLED.equals(status) && order.getPayment() != null) {
             order.getPayment().setStatus(OrderStatus.REFUNDED);
-            order.getOrderItems().forEach(item ->
-                    inventoryRepository.increaseStock(item.getProductSku().getId(), item.getQuantity())
-            );
+            order.getOrderItems().forEach(
+                    item -> inventoryRepository.increaseStock(item.getProductSku().getId(), item.getQuantity()));
         }
 
         OrderDetail updatedOrder = orderRepository.save(order);
@@ -287,17 +354,233 @@ public class OrderServiceImpl implements OrderService {
                 emailNotificationService.sendOrderShippedEmail(
                         customerEmail,
                         updatedOrder.getOrderNumber(),
-                        updatedOrder.getOrderNumber()
-                );
+                        updatedOrder.getOrderNumber());
             } else if (OrderStatus.CANCELLED.equals(status)) {
                 emailNotificationService.sendOrderCancellationEmail(
                         customerEmail,
                         updatedOrder.getOrderNumber(),
-                        "Order cancelled by admin"
-                );
+                        "Order cancelled by admin");
             }
         } catch (Exception e) {
-            log.warn("Failed to send status update email for order {}: {}", updatedOrder.getOrderNumber(), e.getMessage());
+            log.warn("Failed to send status update email for order {}: {}", updatedOrder.getOrderNumber(),
+                    e.getMessage());
+        }
+
+        log.info(
+                "🔥 START FCM: order={}, customerId={}, status={}",
+                updatedOrder.getOrderNumber(),
+                updatedOrder.getUser().getId(),
+                status);
+
+        try {
+            Long customerId = updatedOrder.getUser().getId();
+
+            String title;
+            String body;
+
+            if (OrderStatus.CONFIRMED.equals(status)) {
+                title = "Order Confirmed 🎉";
+                body = "Your order " + updatedOrder.getOrderNumber()
+                        + " has been confirmed.";
+
+            } else if (OrderStatus.PROCESSING.equals(status)) {
+                title = "Order Processing 📦";
+                body = "Your order " + updatedOrder.getOrderNumber()
+                        + " is being processed.";
+
+            } else if (OrderStatus.SHIPPED.equals(status)) {
+                title = "Order Shipped 🚚";
+                body = "Your order " + updatedOrder.getOrderNumber()
+                        + " is on the way.";
+
+            } else if (OrderStatus.DELIVERED.equals(status)) {
+                title = "Order Delivered ✅";
+                body = "Your order " + updatedOrder.getOrderNumber()
+                        + " has been delivered.";
+
+            } else if (OrderStatus.CANCELLED.equals(status)) {
+                title = "Order Cancelled ❌";
+                body = "Your order " + updatedOrder.getOrderNumber()
+                        + " has been cancelled.";
+
+            } else {
+                title = "Order Updated";
+                body = "Your order " + updatedOrder.getOrderNumber()
+                        + " status changed to " + status + ".";
+            }
+
+            firebaseNotificationService.sendToUser(
+                    customerId,
+                    title,
+                    body,
+                    Map.of(
+                            "type", "ORDER_STATUS",
+                            "orderId", updatedOrder.getId().toString(),
+                            "orderNumber", updatedOrder.getOrderNumber(),
+                            "status", status));
+
+            log.info(
+                    "✅ END FCM: order={}, customerId={}, status={}",
+                    updatedOrder.getOrderNumber(),
+                    customerId,
+                    status);
+
+        } catch (Exception e) {
+            log.error(
+                    "❌ FCM ERROR: order={}, error={}",
+                    updatedOrder.getOrderNumber(),
+                    e.getMessage(),
+                    e);
+        }
+
+        // =========================
+
+        // FCM PUSH NOTIFICATION
+
+        // =========================
+
+        try {
+
+            Long customerId =
+
+                    updatedOrder.getUser().getId();
+
+            String title;
+
+            String body;
+
+            switch (status) {
+
+                case OrderStatus.CONFIRMED -> {
+
+                    title = "Order Confirmed 🎉";
+
+                    body = "Your order "
+
+                            + updatedOrder.getOrderNumber()
+
+                            + " has been confirmed.";
+
+                }
+
+                case OrderStatus.PROCESSING -> {
+
+                    title = "Order Processing 📦";
+
+                    body = "Your order "
+
+                            + updatedOrder.getOrderNumber()
+
+                            + " is being processed.";
+
+                }
+
+                case OrderStatus.SHIPPED -> {
+
+                    title = "Order Shipped 🚚";
+
+                    body = "Your order "
+
+                            + updatedOrder.getOrderNumber()
+
+                            + " is on the way.";
+
+                }
+
+                case OrderStatus.DELIVERED -> {
+
+                    title = "Order Delivered ✅";
+
+                    body = "Your order "
+
+                            + updatedOrder.getOrderNumber()
+
+                            + " has been delivered.";
+
+                }
+
+                case OrderStatus.CANCELLED -> {
+
+                    title = "Order Cancelled ❌";
+
+                    body = "Your order "
+
+                            + updatedOrder.getOrderNumber()
+
+                            + " has been cancelled.";
+
+                }
+
+                default -> {
+
+                    title = "Order Updated";
+
+                    body = "Your order "
+
+                            + updatedOrder.getOrderNumber()
+
+                            + " status changed to "
+
+                            + status + ".";
+
+                }
+
+            }
+
+            firebaseNotificationService.sendToUser(
+
+                    customerId,
+
+                    title,
+
+                    body,
+
+                    Map.of(
+
+                            "type", "ORDER_STATUS",
+
+                            "orderId",
+
+                            updatedOrder.getId().toString(),
+
+                            "orderNumber",
+
+                            updatedOrder.getOrderNumber(),
+
+                            "status",
+
+                            status
+
+                    )
+
+            );
+
+            log.info(
+
+                    "FCM notification sent for order {} to user {} with status {}",
+
+                    updatedOrder.getOrderNumber(),
+
+                    customerId,
+
+                    status
+
+            );
+
+        } catch (Exception e) {
+
+            // FCM failure must not make order update fail
+
+            log.warn(
+
+                    "Failed to send FCM notification for order {}: {}",
+
+                    updatedOrder.getOrderNumber(),
+
+                    e.getMessage()
+
+            );
+
         }
 
         return orderMapper.toResponse(updatedOrder);
@@ -320,9 +603,8 @@ public class OrderServiceImpl implements OrderService {
         order.setStatus(OrderStatus.CANCELLED);
         if (order.getPayment() != null) {
             order.getPayment().setStatus(OrderStatus.REFUNDED);
-            order.getOrderItems().forEach(item ->
-                    inventoryRepository.increaseStock(item.getProductSku().getId(), item.getQuantity())
-            );
+            order.getOrderItems().forEach(
+                    item -> inventoryRepository.increaseStock(item.getProductSku().getId(), item.getQuantity()));
         }
         OrderDetail cancelled = orderRepository.save(order);
 
@@ -346,8 +628,7 @@ public class OrderServiceImpl implements OrderService {
             emailNotificationService.sendOrderCancellationEmail(
                     cancelled.getUser().getEmail(),
                     cancelled.getOrderNumber(),
-                    "Cancelled by customer"
-            );
+                    "Cancelled by customer");
         } catch (Exception e) {
             log.warn("Failed to send cancellation email for order {}: {}", cancelled.getOrderNumber(), e.getMessage());
         }
@@ -362,13 +643,15 @@ public class OrderServiceImpl implements OrderService {
             throw new ResourceNotFoundException("User not found with id: " + userId);
         }
         OrderDetail order = orderRepository.findByIdAndUserIdWithFullDetail(orderId, userId)
-                .orElseThrow(() -> new ResourceNotFoundException("Order not found with id: " + orderId + " for user: " + userId));
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Order not found with id: " + orderId + " for user: " + userId));
         return orderMapper.toResponse(order);
     }
 
     @Override
     @Transactional(readOnly = true)
-    public Page<ResponseErrorTemplate> getOrderDetailHistory(Long userId, String status, LocalDateTime startDate, LocalDateTime endDate, Pageable pageable) {
+    public Page<ResponseErrorTemplate> getOrderDetailHistory(Long userId, String status, LocalDateTime startDate,
+            LocalDateTime endDate, Pageable pageable) {
         if (!userRepository.existsById(userId)) {
             throw new ResourceNotFoundException("User not found with id: " + userId);
         }
@@ -389,7 +672,8 @@ public class OrderServiceImpl implements OrderService {
     }
 
     /**
-     * Product prices are stored in USD. Default to USD when the client doesn't choose,
+     * Product prices are stored in USD. Default to USD when the client doesn't
+     * choose,
      * and reject anything KHQR can't express.
      */
     private String resolveCurrency(String currency) {
@@ -404,8 +688,10 @@ public class OrderServiceImpl implements OrderService {
     }
 
     /**
-     * Payment amounts are tracked in USD; KHQR needs the amount expressed in whichever
-     * currency the payer chose, so convert to KHR using the configured exchange rate.
+     * Payment amounts are tracked in USD; KHQR needs the amount expressed in
+     * whichever
+     * currency the payer chose, so convert to KHR using the configured exchange
+     * rate.
      */
     private double toBakongAmount(BigDecimal usdAmount, String currency) {
         if ("KHR".equals(currency)) {
@@ -417,9 +703,12 @@ public class OrderServiceImpl implements OrderService {
     }
 
     /**
-     * ABA and ACLEDA don't have separate merchant integrations here — a KHQR code generated
-     * via Bakong is the national interbank standard, so any KHQR-compatible bank app
-     * (ABA Mobile, ACLEDA app, etc.) can already scan/open it. Treat them as the same rail.
+     * ABA and ACLEDA don't have separate merchant integrations here — a KHQR code
+     * generated
+     * via Bakong is the national interbank standard, so any KHQR-compatible bank
+     * app
+     * (ABA Mobile, ACLEDA app, etc.) can already scan/open it. Treat them as the
+     * same rail.
      */
     private boolean isKhqrPaymentMethod(String paymentMethod) {
         return OrderStatus.BAKONG.equalsIgnoreCase(paymentMethod)
@@ -428,15 +717,21 @@ public class OrderServiceImpl implements OrderService {
     }
 
     /**
-     * Persist a {@link com.example.learning_spring_security.Model.PaymentTransaction} for a KHQR
-     * order once the Bakong result is known. Runs in the caller's transaction, so if the record
-     * fails the whole verify/callback rolls back — a confirmed order must always have a matching
-     * transaction (refund logic depends on finding a SUCCESS transaction for the order). Callers
-     * already guard against re-entry via the CONFIRMED/CANCELLED short-circuits, so this does not
+     * Persist a
+     * {@link com.example.learning_spring_security.Model.PaymentTransaction} for a
+     * KHQR
+     * order once the Bakong result is known. Runs in the caller's transaction, so
+     * if the record
+     * fails the whole verify/callback rolls back — a confirmed order must always
+     * have a matching
+     * transaction (refund logic depends on finding a SUCCESS transaction for the
+     * order). Callers
+     * already guard against re-entry via the CONFIRMED/CANCELLED short-circuits, so
+     * this does not
      * create duplicate rows on gateway retries.
      */
     private void recordBakongTransaction(OrderDetail order, Payment payment,
-                                         TransactionStatus status, String reason) {
+            TransactionStatus status, String reason) {
         PaymentTransactionRequest txnRequest = PaymentTransactionRequest.builder()
                 .orderId(order.getId())
                 .customerId(order.getUser() != null ? order.getUser().getId() : null)
@@ -464,6 +759,7 @@ public class OrderServiceImpl implements OrderService {
         }
         return null;
     }
+
     @Override
     public ResponseErrorTemplate createOrderWithBakongPayment(Long userId, OrderRequest request) {
         if (!isKhqrPaymentMethod(request.getPaymentMethod())) {
@@ -504,7 +800,7 @@ public class OrderServiceImpl implements OrderService {
 
                 Payment payment = pendingOrder.getPayment();
 
-                String md5 = bakongResponse.getData().getMd5(); //  REAL KEY
+                String md5 = bakongResponse.getData().getMd5(); // REAL KEY
 
                 payment.setPaymentProvider(payment.getPaymentMethod());
                 payment.setPaymentProviderResponse(bakongResponse.getData().getQr());
@@ -527,7 +823,9 @@ public class OrderServiceImpl implements OrderService {
                 log.error("Bakong QR generation returned a non-success status for order {}: {}",
                         orderData.getOrderNumber(), bakongResponse);
                 return ResponseErrorTemplate.builder()
-                        .message("Order created, but Bakong QR generation failed. Retry payment via POST /api/v1/orders/bakong/initiate?orderId=" + orderData.getId())
+                        .message(
+                                "Order created, but Bakong QR generation failed. Retry payment via POST /api/v1/orders/bakong/initiate?orderId="
+                                        + orderData.getId())
                         .code(orderResponse.code())
                         .object(orderData)
                         .build();
@@ -545,6 +843,7 @@ public class OrderServiceImpl implements OrderService {
 
         return orderResponse;
     }
+
     @Override
     @Transactional
     public ResponseErrorTemplate initiateBakongPayment(Long orderId) {
@@ -655,8 +954,7 @@ public class OrderServiceImpl implements OrderService {
         }
 
         BakongResponse response = bakongService.checkTransactionByMD5(
-                new CheckTransactionRequest(bakongMd5)
-        );
+                new CheckTransactionRequest(bakongMd5));
 
         if (response != null && response.isSuccess() && response.getData() != null) {
 
@@ -668,12 +966,83 @@ public class OrderServiceImpl implements OrderService {
             // Money confirmed received — record the successful PaymentTransaction.
             recordBakongTransaction(order, payment, TransactionStatus.SUCCESS, "Bakong payment verified");
 
+            // =========================
+
+            // PAYMENT SUCCESS FCM
+
+            // =========================
+
+            try {
+
+                Long customerId = order.getUser().getId();
+
+                log.info(
+
+                        "🔥 START PAYMENT SUCCESS FCM: order={}, customerId={}",
+
+                        order.getOrderNumber(),
+
+                        customerId
+
+                );
+
+                firebaseNotificationService.sendToUser(
+
+                        customerId,
+
+                        "Payment Successful 💳",
+
+                        "Payment for order "
+
+                                + order.getOrderNumber()
+
+                                + " was successful.",
+
+                        Map.of(
+
+                                "type", "PAYMENT_SUCCESS",
+
+                                "orderId", order.getId().toString(),
+
+                                "orderNumber", order.getOrderNumber(),
+
+                                "orderStatus", OrderStatus.CONFIRMED,
+
+                                "paymentStatus", OrderStatus.COMPLETED
+
+                        )
+
+                );
+
+                log.info(
+
+                        "✅ PAYMENT SUCCESS FCM SENT: order={}, customerId={}",
+
+                        order.getOrderNumber(),
+
+                        customerId
+
+                );
+
+            } catch (Exception e) {
+
+                log.warn(
+
+                        "Failed to send payment success FCM. order={}, error={}",
+
+                        order.getOrderNumber(),
+
+                        e.getMessage()
+
+                );
+
+            }
+
             return ResponseErrorTemplate.builder()
                     .message("Payment verified successfully")
                     .object(Map.of(
                             "orderId", orderId,
-                            "status", OrderStatus.CONFIRMED
-                    ))
+                            "status", OrderStatus.CONFIRMED))
                     .build();
         }
 
@@ -681,8 +1050,7 @@ public class OrderServiceImpl implements OrderService {
                 .message("Payment verification failed")
                 .object(Map.of(
                         "orderId", orderId,
-                        "status", OrderStatus.FAILED
-                ))
+                        "status", OrderStatus.FAILED))
                 .build();
     }
 
@@ -696,22 +1064,22 @@ public class OrderServiceImpl implements OrderService {
             throw new BadRequestException("Order does not use a Bakong/ABA/ACLEDA (KHQR) payment method");
         }
 
-        // Gateway retried a callback we already applied — don't reprocess (e.g. double stock restock).
+        // Gateway retried a callback we already applied — don't reprocess (e.g. double
+        // stock restock).
         if (OrderStatus.CONFIRMED.equals(order.getStatus()) || OrderStatus.CANCELLED.equals(order.getStatus())) {
             return ResponseErrorTemplate.builder()
                     .message("Callback already processed for this order")
                     .object(Map.of(
                             "orderNumber", orderNumber,
                             "orderStatus", order.getStatus(),
-                            "paymentStatus", order.getPayment().getStatus()
-                    ))
+                            "paymentStatus", order.getPayment().getStatus()))
                     .build();
         }
 
         Payment payment = order.getPayment();
 
         // Store the real Bakong transaction ID
-        payment.setTransactionId(transactionId);         // keep generic field updated too
+        payment.setTransactionId(transactionId); // keep generic field updated too
 
         TransactionStatus transactionStatus;
         switch (status.toUpperCase()) {
@@ -725,9 +1093,8 @@ public class OrderServiceImpl implements OrderService {
             case "CANCELLED":
                 order.setStatus(OrderStatus.CANCELLED);
                 payment.setStatus(OrderStatus.FAILED);
-                order.getOrderItems().forEach(item ->
-                        inventoryRepository.increaseStock(item.getProductSku().getId(), item.getQuantity())
-                );
+                order.getOrderItems().forEach(
+                        item -> inventoryRepository.increaseStock(item.getProductSku().getId(), item.getQuantity()));
                 transactionStatus = TransactionStatus.FAILED;
                 break;
             case "PENDING":
@@ -740,7 +1107,8 @@ public class OrderServiceImpl implements OrderService {
 
         orderRepository.save(order);
 
-        // Record the settled (SUCCESS/FAILED) outcome as a PaymentTransaction. PENDING is skipped
+        // Record the settled (SUCCESS/FAILED) outcome as a PaymentTransaction. PENDING
+        // is skipped
         // so repeated pending callbacks don't spam the table with unsettled rows.
         if (transactionStatus != null) {
             recordBakongTransaction(order, payment, transactionStatus,
@@ -753,8 +1121,7 @@ public class OrderServiceImpl implements OrderService {
                         "orderNumber", orderNumber,
                         "transactionId", transactionId,
                         "orderStatus", order.getStatus(),
-                        "paymentStatus", payment.getStatus()
-                ))
+                        "paymentStatus", payment.getStatus()))
                 .build();
     }
 
@@ -762,13 +1129,11 @@ public class OrderServiceImpl implements OrderService {
     @Override
     public ResponseErrorTemplate getOrderStatusSummary() {
 
-        OrderStatusSummaryResponse response =
-                orderRepository.getOrderStatusSummary();
+        OrderStatusSummaryResponse response = orderRepository.getOrderStatusSummary();
 
         return ResponseErrorTemplate.success(
                 "Order status summary retrieved successfully",
-                response
-        );
+                response);
     }
 
     @Override
@@ -776,8 +1141,7 @@ public class OrderServiceImpl implements OrderService {
     public ResponseErrorTemplate getOrderItemsByOrderId(Long orderId) {
 
         OrderDetail order = orderRepository.findByIdWithFullDetail(orderId)
-                .orElseThrow(() ->
-                        new ResourceNotFoundException("Order not found with id: " + orderId));
+                .orElseThrow(() -> new ResourceNotFoundException("Order not found with id: " + orderId));
 
         List<OrderItemResponse> items = order.getOrderItems()
                 .stream()
@@ -786,7 +1150,6 @@ public class OrderServiceImpl implements OrderService {
 
         return ResponseErrorTemplate.success(
                 "Order items retrieved successfully",
-                items
-        );
+                items);
     }
 }
